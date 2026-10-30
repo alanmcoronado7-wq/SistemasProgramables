@@ -1,0 +1,13 @@
+# Dependencias directas verificadas en el entorno local el 30-10-2026.
+paho-mqtt==2.1.0
+firebase-admin==7.7.0
+requests==2.34.2
+python-dotenv==1.2.4
+opencv-python==5.0.0.93
+ultralytics==8.4.193
+easyocr==1.7.2
+numpy==2.5.4
+
+# Runtime de IA instalado como dependencia de Ultralytics/EasyOCR.
+# Se fija para que el entorno validado sea reproducible.
+torch==2.15.0

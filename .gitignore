@@ -1,28 +1,24 @@
-
-# Entorno virtual de Python
+# Entorno Python
 .venv/
-venv/
-
-# Archivos temporales de Python
 __pycache__/
 *.pyc
-*.pyo
+.pytest_cache/
 
-# Variables de entorno y credenciales
+# Credenciales privadas
 .env
 .env.*
 !.env.example
 secrets/
+config_local.py
 *.pem
-*.key
 
-# Evidencias de accidentes (fotos y ubicaciones)
+# Evidencias privadas
 evidencias/
-
-# Archivos temporales
 *.log
-.DS_Store
-Thumbs.db
 
-# Configuración local del editor
+# Modelos de IA
+*.pt
+
+# IDE
 .vscode/
+.idea/

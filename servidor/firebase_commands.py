@@ -1,27 +1,33 @@
-
+# ============================================
+# Proyecto:  Moto-SOS
+# Archivo:   firebase_commands.py
+# Objetivo:  Convertir comandos Firebase en órdenes MQTT para los actuadores.
+# Equipo:    Fernández Guerrero Cristóbal
+#            García Silva Emmanuel Alejandro
+#            Martínez Coronado Alan Mauricio
+# Matrículas: PENDIENTES
+# Materia:   Sistemas Programables — ISC TecNM León
+# Semestre:  ago-dic-2026
+# ============================================
 import time
 import uuid
 import threading
-from pathlib import Path
 
 import firebase_admin
 import paho.mqtt.client as mqtt
 from firebase_admin import credentials, db
 
+from servidor.configuracion import (
+    CREDENTIALS,
+    DATABASE_URL,
+    MQTT_BROKER,
+    MQTT_KEEPALIVE,
+    MQTT_PORT,
+)
+
 # ======================================
 # CONFIGURACION
 # ======================================
-
-BASE_DIR = Path(__file__).resolve().parent
-
-CREDENCIALES = BASE_DIR / "secrets" / "serviceAccountKey.json"
-
-DATABASE_URL = (
-    "https://moto-sos-7b12e-default-rtdb.firebaseio.com"
-)
-
-MQTT_BROKER = "broker.hivemq.com"
-MQTT_PORT = 1883
 
 TOPICOS = {
     "buzzer": "motosos/buzzer/cmd",
@@ -149,7 +155,7 @@ def crear_listener(cliente, referencia):
 # ======================================
 
 def main():
-    cred = credentials.Certificate(str(CREDENCIALES))
+    cred = credentials.Certificate(str(CREDENTIALS))
 
     firebase_admin.initialize_app(cred, {
         "databaseURL": DATABASE_URL
@@ -168,7 +174,7 @@ def main():
     escucha = None
 
     try:
-        cliente.connect(MQTT_BROKER, MQTT_PORT, 60)
+        cliente.connect(MQTT_BROKER, MQTT_PORT, MQTT_KEEPALIVE)
         cliente.loop_start()
 
         if not mqtt_conectado.wait(timeout=10):

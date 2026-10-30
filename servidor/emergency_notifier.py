@@ -1,12 +1,23 @@
+# ============================================
+# Proyecto:  Moto-SOS
+# Archivo:   emergency_notifier.py
+# Objetivo:  Registrar emergencias y notificar por Telegram con evidencia e IA.
+# Equipo:    Fernández Guerrero Cristóbal
+#            García Silva Emmanuel Alejandro
+#            Martínez Coronado Alan Mauricio
+# Matrículas: PENDIENTES
+# Materia:   Sistemas Programables — ISC TecNM León
+# Semestre:  ago-dic-2026
+# ============================================
 """Moto-SOS: MQTT -> foto IP -> Telegram + historial Firebase.
 
-Se ejecuta JUNTO a mqtt_firebase_bridge.py y firebase_commands.py.
+Se ejecuta JUNTO a servidor.mqtt_bridge y servidor.firebase_commands.
 No reemplaza la telemetria ni el control remoto ya probados.
 
 PRUEBAS:
-  python emergency_notifier.py --probar-camara
-  python emergency_notifier.py --simulacro
-  python emergency_notifier.py
+  python -m servidor.emergency_notifier --probar-camara
+  python -m servidor.emergency_notifier --simulacro
+  python -m servidor.emergency_notifier
 
 NO es un servicio de emergencias certificado ni garantizado.
 """
@@ -29,17 +40,16 @@ import cv2
 import firebase_admin
 import paho.mqtt.client as mqtt
 import requests
-from dotenv import load_dotenv
 from firebase_admin import credentials, db, storage
-from vision_ia import analizar_imagen, resumen_ia
-
-BASE_DIR = Path(__file__).resolve().parent
-load_dotenv(BASE_DIR / ".env")
-
-DATABASE_URL = "https://moto-sos-7b12e-default-rtdb.firebaseio.com"
-CREDENTIALS = BASE_DIR / "secrets" / "serviceAccountKey.json"
-MQTT_BROKER = "broker.hivemq.com"
-MQTT_PORT = 1883
+from servidor.configuracion import (
+    CREDENTIALS,
+    DATABASE_URL,
+    EVIDENCE_DIR,
+    MQTT_BROKER,
+    MQTT_KEEPALIVE,
+    MQTT_PORT,
+)
+from servidor.ia.vision_ia import analizar_imagen, resumen_ia
 TOPIC_EMERGENCY = "motosos/emergencia/confirmada"
 TOPIC_ALERT = "motosos/alerta"
 
@@ -50,7 +60,6 @@ CAMERA_STREAM_URL = os.getenv("CAMERA_STREAM_URL", "").strip()
 FIREBASE_STORAGE_BUCKET = os.getenv("FIREBASE_STORAGE_BUCKET", "").strip()
 TZ_NAME = os.getenv("MOTOSOS_TZ", "America/Mexico_City").strip()
 
-EVIDENCE_DIR = BASE_DIR / "evidencias"
 DEDUPE_SECONDS = 12  # Mitiga repeticion inmediata; NO sustituye un ID desde el ESP32.
 QUEUE = queue.Queue(maxsize=30)
 STOP = threading.Event()
@@ -95,42 +104,81 @@ def _validar_coordenadas(telemetria: dict):
     return None
 
 
-def construir_mensaje(telemetria: dict, fecha: datetime, simulacro: bool):
-    """Mensaje informativo. GPS = ultima posicion, NO localizacion garantizada."""
-    coord = _validar_coordenadas(telemetria)
-    actualizacion = telemetria.get("ultima_actualizacion")
-    try:
-        edad_s = max(0, (fecha.timestamp() * 1000 - int(actualizacion)) / 1000)
-    except (ValueError, TypeError):
-        edad_s = None
+def construir_mensaje(telemetria: dict, fecha: datetime, simulacro: bool,
+                      ultimo_valido: dict | None = None):
+    """Prioriza GPS reciente; luego ultima posicion marcada con fecha/antiguedad.
 
-    etiqueta = "SIMULACRO - NO ES UNA EMERGENCIA" if simulacro else "MOTO-SOS: ACCIDENTE CONFIRMADO"
+    Nunca presentaremos coordenadas guardadas como posicion actual sin verificacion.
+    """
+    estado = telemetria.get("gps_estado") or {}
+    if not isinstance(estado, dict):
+        estado = {}
+
+    ahora_ms = int(fecha.timestamp() * 1000)
+    coord = _validar_coordenadas(telemetria)
+    confirmado = telemetria.get("gps_ultima_confirmacion")
+    if not confirmado:
+        confirmado = telemetria.get("ultima_actualizacion")
+    try:
+        edad = max(0, (ahora_ms - int(confirmado)) / 1000)
+    except (ValueError, TypeError):
+        edad = None
+    disponible = bool(telemetria.get("gps_disponible", bool(coord)))
+    if estado and estado.get("fix") is False:
+        disponible = False
+    actual = bool(coord and disponible and edad is not None and edad <= 40)
+    tipo = "GPS_ACTUAL" if actual else "SIN_GPS"
+
+    nombre = "SIMULACRO - NO ES UNA EMERGENCIA" if simulacro else "MOTO-SOS: ACCIDENTE CONFIRMADO"
     lineas = [
-        f"🚨 {etiqueta}",
+        f"🚨 {nombre}",
         f"Fecha y hora de confirmación: {fecha:%d/%m/%Y %H:%M:%S}",
         f"Zona horaria: {TZ_NAME}",
     ]
-    if coord:
-        lat, lon = coord
-        lineas.extend([
-            f"Última posición GPS: {lat:.6f}, {lon:.6f}",
-            f"Mapa: https://www.google.com/maps?q={lat:.6f},{lon:.6f}",
-        ])
-        if edad_s is not None and edad_s > 30:
-            lineas.append("ATENCIÓN: datos posiblemente desactualizados")
-        else:
-            lineas.append("Posición reportada por el casco (no verificada)")
+    punto = coord if actual else None
+    edad_posicion = edad if actual else None
+    if actual:
+        lineas.append("Ubicación: GPS reportado recientemente por el casco")
     else:
-        lineas.append("Ubicación: no disponible; confirmar por otra vía")
+        candidato = ultimo_valido if isinstance(ultimo_valido, dict) else {}
+        coord_anterior = _validar_coordenadas(candidato)
+        try:
+            edad_antigua = max(0, (ahora_ms - int(candidato.get("timestamp"))) / 1000)
+        except (ValueError, TypeError):
+            edad_antigua = None
+        # Por defecto, usar datos historicos de no mas de 30 minutos.
+        max_edad = int(os.getenv("MOTOSOS_MAX_ULTIMA_UBICACION_SEG", "1800"))
+        if coord_anterior and edad_antigua is not None and edad_antigua <= max_edad:
+            punto = coord_anterior
+            edad_posicion = edad_antigua
+            tipo = "ULTIMA_CONOCIDA"
+            lineas.append(
+                "⚠️ GPS actual SIN SEÑAL. Última ubicación conocida "
+                f"(hace {int(edad_antigua)} segundos; NO confirma sitio del accidente):"
+            )
+        else:
+            lineas.append("⚠️ Ubicación NO disponible. Solicitar ubicación por teléfono.")
 
+    if punto:
+        lat, lon = punto
+        lineas.append(f"Coordenadas: {lat:.6f}, {lon:.6f}")
+        lineas.append(f"Google Maps: https://www.google.com/maps?q={lat:.6f},{lon:.6f}")
+    if estado:
+        sat = estado.get("satelites")
+        hdop = estado.get("hdop")
+        lineas.append(
+            f"GPS: {estado.get('estado', 'DESCONOCIDO')} | "
+            f"satélites: {sat if sat is not None else 'N/D'} | "
+            f"HDOP: {hdop if hdop is not None else 'N/D'}"
+        )
     fuerza = telemetria.get("fuerza_g")
     temperatura = telemetria.get("temperatura")
     bpm = telemetria.get("bpm")
     lineas.append(f"Fuerza G reportada: {fuerza if fuerza is not None else 'sin dato'}")
     lineas.append(f"Temperatura del casco: {temperatura if temperatura is not None else 'sin dato'} °C")
     lineas.append(f"Pulso (BPM): {bpm if bpm not in (None, 0, '0') else 'sin lectura válida'}")
-    lineas.append("Aviso automático; verificar la situación antes de actuar")
-    return "\n".join(lineas), coord, edad_s
+    lineas.append("Aviso automático; confirmar situación y ubicación antes de actuar")
+    return "\n".join(lineas), punto, edad_posicion, tipo
 
 
 def capturar_foto(destino: Path) -> Path | None:
@@ -248,14 +296,47 @@ def notificar_foto_telegram(foto: Path, mensaje: str) -> dict:
         return {"estado": "ERROR", "detalle": str(exc)[:200]}
 
 
+def construir_registro_accidente(
+    telemetria: dict,
+    fecha: datetime,
+    simulacro: bool,
+    ultima_valida: dict | None = None,
+) -> tuple[dict, str]:
+    """Genera el registro Firebase sin realizar I/O ni llamadas externas."""
+    mensaje, coordenadas, edad_gps, tipo_ubicacion = construir_mensaje(
+        telemetria, fecha, simulacro, ultima_valida
+    )
+    datos = {
+        "timestamp": int(fecha.timestamp() * 1000),
+        "fecha_hora_local": fecha.isoformat(),
+        "tipo": "SIMULACRO" if simulacro else "EMERGENCIA_CONFIRMADA",
+        "estado": "PROCESANDO",
+        "fuerza_g_reportada": telemetria.get("fuerza_g"),
+        "temperatura": telemetria.get("temperatura"),
+        "bpm": telemetria.get("bpm"),
+        "latitud": coordenadas[0] if coordenadas else None,
+        "longitud": coordenadas[1] if coordenadas else None,
+        "edad_ubicacion_seg": round(edad_gps, 1) if edad_gps is not None else None,
+        "gps_estado": telemetria.get("gps_estado"),
+        "ubicacion_tipo": tipo_ubicacion,
+        "mensaje_telegram": mensaje,
+        "foto_local": None,
+        "foto_anotada_local": None,
+        "analisis_ia": {"estado": "PENDIENTE"},
+        "foto_storage": {"estado": "PENDIENTE"},
+        "telegram": {
+            "mensaje": {"estado": "PENDIENTE"},
+            "foto": {"estado": "PENDIENTE"},
+        },
+    }
+    return datos, mensaje
+
+
 def registrar_accidente(fecha: datetime, simulacro: bool = False) -> None:
     """Mensaje de alerta primero, foto despues. El historial no bloquea Telegram."""
     historico = db.reference("moto_sos/historico_accidentes")
     evento = historico.push()
     event_id = evento.key
-    timestamp_ms = int(fecha.timestamp() * 1000)
-    tipo = "SIMULACRO" if simulacro else "EMERGENCIA_CONFIRMADA"
-
     try:
         telemetria = db.reference("moto_sos/telemetria_actual").get() or {}
         if not isinstance(telemetria, dict):
@@ -264,26 +345,16 @@ def registrar_accidente(fecha: datetime, simulacro: bool = False) -> None:
         LOG.exception("No se pudo leer telemetria Firebase")
         telemetria = {}
 
-    mensaje, coordenadas, edad_gps = construir_mensaje(telemetria, fecha, simulacro)
-    datos = {
-        "timestamp": timestamp_ms,
-        "fecha_hora_local": fecha.isoformat(),
-        "tipo": tipo,
-        "estado": "PROCESANDO",
-        "fuerza_g_reportada": telemetria.get("fuerza_g"),
-        "temperatura": telemetria.get("temperatura"),
-        "bpm": telemetria.get("bpm"),
-        "latitud": coordenadas[0] if coordenadas else None,
-        "longitud": coordenadas[1] if coordenadas else None,
-        "edad_telemetria_seg": round(edad_gps, 1) if edad_gps is not None else None,
-        "ubicacion_tipo": "ULTIMA_REPORTADA" if coordenadas else "SIN_GPS",
-        "mensaje_telegram": mensaje,
-        "foto_local": None,
-        "foto_anotada_local": None,
-        "analisis_ia": {"estado": "PENDIENTE"},
-        "foto_storage": {"estado": "PENDIENTE"},
-        "telegram": {"mensaje": {"estado": "PENDIENTE"}, "foto": {"estado": "PENDIENTE"}},
-    }
+    try:
+        ultima_valida = db.reference("moto_sos/ubicacion_ultima_valida").get() or {}
+    except Exception:
+        LOG.exception("No se pudo leer ultima ubicacion GPS valida")
+        ultima_valida = {}
+
+    datos, mensaje = construir_registro_accidente(
+        telemetria, fecha, simulacro, ultima_valida
+    )
+    tipo = datos["tipo"]
 
     def actualizar_seguro(nuevos: dict) -> None:
         try:
@@ -473,7 +544,7 @@ def main():
     cliente.on_connect = on_connect
     cliente.on_message = on_message
     try:
-        cliente.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
+        cliente.connect(MQTT_BROKER, MQTT_PORT, keepalive=MQTT_KEEPALIVE)
         LOG.info("Escuchando emergencias Moto-SOS...")
         cliente.loop_forever()
     except KeyboardInterrupt:

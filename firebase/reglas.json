@@ -1,0 +1,27 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "moto_sos": {
+      ".read": "auth != null && (auth.token.motosos_reader === true || auth.token.motosos_admin === true)",
+      ".write": "auth != null && auth.token.motosos_admin === true",
+      "comandos": {
+        "buzzer": {
+          ".validate": "newData.isString() && (newData.val() === 'ON' || newData.val() === 'OFF')"
+        },
+        "ventilador": {
+          ".validate": "newData.isString() && (newData.val() === 'ON' || newData.val() === 'OFF')"
+        },
+        "vibrador": {
+          ".validate": "newData.isString() && (newData.val() === 'ON' || newData.val() === 'OFF')"
+        },
+        "cancelar": {
+          ".validate": "newData.isString() && (newData.val() === 'ON' || newData.val() === 'OFF')"
+        },
+        "$otro": {
+          ".validate": false
+        }
+      }
+    }
+  }
+}

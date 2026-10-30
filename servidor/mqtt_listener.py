@@ -1,10 +1,20 @@
-
+# ============================================
+# Proyecto:  Moto-SOS
+# Archivo:   mqtt_listener.py
+# Objetivo:  Mostrar en consola los tópicos MQTT del casco durante diagnóstico.
+# Equipo:    Fernández Guerrero Cristóbal
+#            García Silva Emmanuel Alejandro
+#            Martínez Coronado Alan Mauricio
+# Matrículas: PENDIENTES
+# Materia:   Sistemas Programables — ISC TecNM León
+# Semestre:  ago-dic-2026
+# ============================================
 import uuid
 import paho.mqtt.client as mqtt
 
+from servidor.configuracion import MQTT_BROKER, MQTT_KEEPALIVE, MQTT_PORT
+
 # Configuración del broker
-MQTT_BROKER = "broker.hivemq.com"
-MQTT_PORT = 1883
 
 # Tópicos publicados por el ESP32
 TOPICOS = [
@@ -12,6 +22,7 @@ TOPICOS = [
     "motosos/temperatura",
     "motosos/pulso",
     "motosos/ubicacion",
+    "motosos/gps/estado",
     "motosos/alerta",
     "motosos/emergencia/confirmada",
 ]
@@ -48,7 +59,7 @@ def main():
 
     try:
         print("Conectando con HiveMQ...")
-        cliente.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
+        cliente.connect(MQTT_BROKER, MQTT_PORT, keepalive=MQTT_KEEPALIVE)
         cliente.loop_forever()
 
     except KeyboardInterrupt:

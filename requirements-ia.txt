@@ -1,0 +1,4 @@
+# Instala primero requirements-notifier.txt del paquete anterior.
+# Estas dependencias pueden descargar cientos de MB (torch y modelos).
+ultralytics>=8.3
+EasyOCR>=1.7.1

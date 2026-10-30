@@ -1,0 +1,28 @@
+
+# Entorno virtual de Python
+.venv/
+venv/
+
+# Archivos temporales de Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Variables de entorno y credenciales
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+
+# Evidencias de accidentes (fotos y ubicaciones)
+evidencias/
+
+# Archivos temporales
+*.log
+.DS_Store
+Thumbs.db
+
+# Configuración local del editor
+.vscode/
